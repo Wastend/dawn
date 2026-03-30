@@ -105,6 +105,9 @@
               </div>
             {%- else -%}
               <div class="cart__ctas" {{ block.shopify_attributes }}>
+                <p class="cart__required-field-message hidden" data-required-checkout-message data-form-id="cart">
+                  Upload one file for each product before checkout.
+                </p>
                 <button
                   type="submit"
                   id="checkout"

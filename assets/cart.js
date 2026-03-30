@@ -84,6 +84,9 @@ class CartItems extends HTMLElement {
   }
 
   onChange(event) {
+    if (!event.target || !event.target.classList.contains('quantity__input')) {
+      return;
+    }
     this.validateQuantity(event);
   }
 
@@ -101,6 +104,7 @@ class CartItems extends HTMLElement {
               targetElement.replaceWith(sourceElement);
             }
           }
+          window.updateRequiredCheckoutFields?.();
         })
         .catch((e) => {
           console.error(e);
@@ -112,6 +116,7 @@ class CartItems extends HTMLElement {
           const html = new DOMParser().parseFromString(responseText, 'text/html');
           const sourceQty = html.querySelector('cart-items');
           this.innerHTML = sourceQty.innerHTML;
+          window.updateRequiredCheckoutFields?.();
         })
         .catch((e) => {
           console.error(e);
@@ -191,6 +196,7 @@ class CartItems extends HTMLElement {
               section.selector
             );
           });
+          window.updateRequiredCheckoutFields?.();
           const updatedValue = parsedState.items[line - 1] ? parsedState.items[line - 1].quantity : undefined;
           let message = '';
           if (items.length === parsedState.items.length && updatedValue !== parseInt(quantityElement.value)) {
@@ -274,6 +280,179 @@ class CartItems extends HTMLElement {
 }
 
 customElements.define('cart-items', CartItems);
+
+if (!window.cartRequiredFieldValidationInitialized) {
+  window.cartRequiredFieldValidationInitialized = true;
+
+  const getUploadGroups = (form) => Array.from(form.querySelectorAll('[data-required-upload-line]'));
+
+  const isGroupComplete = (group) => {
+    const hasUploaded = group.dataset.hasUpload === 'true';
+    return hasUploaded;
+  };
+
+  const getGroupFileInput = (group) => group.querySelector('[data-required-upload-input]');
+
+  const groupHasSelectedFile = (group) => {
+    const input = getGroupFileInput(group);
+    return !!(input && input.files && input.files.length > 0);
+  };
+
+  const setUploadStatus = (group, message, isError = false) => {
+    let status = group.querySelector('[data-upload-status]');
+    if (!status) {
+      status = document.createElement('p');
+      status.className = 'cart-item__required-upload-status';
+      status.setAttribute('data-upload-status', '');
+      group.appendChild(status);
+    }
+
+    status.classList.remove('hidden');
+    status.textContent = message;
+    status.classList.toggle('cart-item__required-upload-status--error', isError);
+  };
+
+  const uploadGroupFile = async (group) => {
+    const input = getGroupFileInput(group);
+    const line = group.dataset.line;
+    const quantity = group.dataset.quantity;
+    if (!input || !input.files || input.files.length === 0) {
+      throw new Error('Please choose a file for each product.');
+    }
+
+    if (!line || !quantity) {
+      throw new Error('Unable to detect cart line for file upload.');
+    }
+
+    const formData = new FormData();
+    formData.append('line', line);
+    formData.append('quantity', quantity);
+    formData.append('properties[Prescription file]', input.files[0]);
+
+    const response = await fetch(`${routes.cart_change_url}`, {
+      method: 'POST',
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error('Failed to save one of the files.');
+    }
+
+    group.dataset.hasUpload = 'true';
+    setUploadStatus(group, 'File saved.', false);
+  };
+
+  const syncFormState = (form) => {
+    const groups = getUploadGroups(form);
+    if (!groups.length) return true;
+
+    let valid = true;
+    groups.forEach((group) => {
+      const complete = isGroupComplete(group);
+      group.classList.toggle('cart-item__required-upload--missing', !complete);
+      valid = valid && complete;
+    });
+
+    const message =
+      form.querySelector('[data-required-checkout-message]') ||
+      document.querySelector(`[data-required-checkout-message][data-form-id="${form.id}"]`);
+    if (message) message.classList.toggle('hidden', valid);
+
+    const buttons = form.querySelectorAll('button[name="checkout"]');
+    buttons.forEach((button) => {
+      if (!button.dataset.initialDisabled) {
+        button.dataset.initialDisabled = button.disabled ? 'true' : 'false';
+      }
+
+      const initiallyDisabled = button.dataset.initialDisabled === 'true';
+      button.disabled = initiallyDisabled || !valid;
+    });
+
+    return valid;
+  };
+
+  window.updateRequiredCheckoutFields = () => {
+    document.querySelectorAll('form.cart__contents').forEach((form) => syncFormState(form));
+  };
+
+  document.addEventListener('change', (event) => {
+    if (!event.target.matches('[data-required-upload-input]')) return;
+    const form = event.target.closest('form.cart__contents');
+    const group = event.target.closest('.cart-item__required-upload');
+    if (group && group.dataset.hasUpload === 'true' && groupHasSelectedFile(group)) {
+      group.dataset.hasUpload = 'false';
+      setUploadStatus(group, 'New file selected. It will be saved on checkout.', false);
+    }
+    if (form) syncFormState(form);
+  });
+
+  document.addEventListener(
+    'submit',
+    async (event) => {
+      const form = event.target.closest('form.cart__contents');
+      if (!form) return;
+      const submitter = event.submitter;
+
+      if (form.dataset.allowCheckoutSubmit === 'true') {
+        delete form.dataset.allowCheckoutSubmit;
+        return;
+      }
+
+      const isCheckoutSubmit = submitter && submitter.name === 'checkout';
+      if (!isCheckoutSubmit) return;
+
+      if (form.dataset.uploadingFiles === 'true') {
+        event.preventDefault();
+        return;
+      }
+
+      const groups = getUploadGroups(form);
+      const missingGroups = groups.filter((group) => !isGroupComplete(group));
+
+      if (!missingGroups.length) {
+        syncFormState(form);
+        return;
+      }
+
+      const missingWithoutFiles = missingGroups.filter((group) => !groupHasSelectedFile(group));
+      if (missingWithoutFiles.length) {
+        syncFormState(form);
+        event.preventDefault();
+        const firstInput = getGroupFileInput(missingWithoutFiles[0]);
+        if (firstInput) firstInput.focus();
+        return;
+      }
+
+      event.preventDefault();
+      form.dataset.uploadingFiles = 'true';
+
+      try {
+        for (const group of missingGroups) {
+          setUploadStatus(group, 'Saving file...', false);
+          await uploadGroupFile(group);
+        }
+
+        window.updateRequiredCheckoutFields();
+        form.dataset.allowCheckoutSubmit = 'true';
+        form.requestSubmit(submitter);
+      } catch (error) {
+        const targetGroup = missingGroups.find((group) => !isGroupComplete(group)) || missingGroups[0];
+        if (targetGroup) {
+          setUploadStatus(targetGroup, error.message || 'Upload failed.', true);
+        }
+      } finally {
+        form.dataset.uploadingFiles = 'false';
+      }
+    },
+    true
+  );
+
+  document.addEventListener('DOMContentLoaded', () => {
+    window.updateRequiredCheckoutFields();
+  });
+
+  window.updateRequiredCheckoutFields();
+}
 
 if (!customElements.get('cart-note')) {
   customElements.define(

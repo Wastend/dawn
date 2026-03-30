@@ -48,7 +48,13 @@
       {%- endif -%}
     </div>
 
-    <form action="{{ routes.cart_url }}" class="cart__contents critical-hidden" method="post" id="cart">
+    <form
+      action="{{ routes.cart_url }}"
+      class="cart__contents critical-hidden"
+      method="post"
+      id="cart"
+      enctype="multipart/form-data"
+    >
       <div class="cart__items" id="main-cart-items" data-id="{{ section.id }}">
         <div class="js-contents">
           {%- if cart != empty -%}
@@ -175,6 +181,45 @@
                           </li>
                         {%- endfor -%}
                       </ul>
+
+                      {%- liquid
+                        assign required_upload_url = blank
+                        for property in item.properties
+                          if property.last contains '/uploads/'
+                            assign required_upload_url = property.last
+                            break
+                          endif
+                        endfor
+                      -%}
+                      <div
+                        class="cart-item__required-upload"
+                        data-required-upload-line="{{ item.index | plus: 1 }}"
+                        data-line="{{ item.index | plus: 1 }}"
+                        data-quantity="{{ item.quantity }}"
+                        data-has-upload="{% if required_upload_url != blank %}true{% else %}false{% endif %}"
+                      >
+                        <label class="cart-item__required-upload-label" for="CartUpload-{{ item.index | plus: 1 }}">
+                          Upload file for this product (PNG, JPG, PDF)
+                        </label>
+                        <input
+                          id="CartUpload-{{ item.index | plus: 1 }}"
+                          class="cart-item__required-upload-input"
+                          type="file"
+                          accept=".png,.jpg,.jpeg,.pdf"
+                          name="properties[Prescription file]"
+                          data-required-upload-input
+                        >
+                        {%- if required_upload_url != blank -%}
+                          <p class="cart-item__required-upload-status">
+                            Existing file:
+                            <a href="{{ required_upload_url }}" class="link" target="_blank">
+                              {{ required_upload_url | split: '/' | last }}
+                            </a>
+                          </p>
+                        {%- else -%}
+                          <p class="cart-item__required-upload-status hidden" data-upload-status></p>
+                        {%- endif -%}
+                      </div>
                     </td>
 
                     <td class="cart-item__totals right medium-hide large-up-hide">
